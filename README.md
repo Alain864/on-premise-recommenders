@@ -2,7 +2,7 @@
 
 Stage 1 implements the data foundation for the search and recommendation prototype:
 
-- ingest source data from `sample_data.xlsx`
+- ingest source data from four parquet files: `users.parquet`, `products.parquet`, `transactions.parquet`, and `interactions.parquet`
 - materialize source and derived tables in SQL
 - compute `user_category_affinity`, `product_stats`, `co_purchase_pairs`, and `co_view_pairs`
 - sync products into Elasticsearch
@@ -17,10 +17,10 @@ Install the project in the virtualenv:
 ./.venv/bin/pip install -e . --no-build-isolation
 ```
 
-Run the Stage 1 pipeline locally with the sample workbook and a SQLite database:
+Run the Stage 1 pipeline locally with parquet source files and a SQLite database:
 
 ```bash
-./.venv/bin/recommender-stage1 run-stage1 --skip-search --skip-embeddings
+./.venv/bin/recommender-stage1 run-stage1 --source-dir ./data/parquet --skip-search --skip-embeddings
 ```
 
 That creates a local prototype database at `var/stage1.db`.
@@ -36,7 +36,11 @@ ELASTICSEARCH_INDEX=products
 CHROMA_PERSIST_DIRECTORY=./var/chroma
 CHROMA_COLLECTION=product_embeddings
 OPENAI_EMBEDDING_MODEL=text-embedding-3-small
-SOURCE_WORKBOOK=sample_data.xlsx
+SOURCE_DATA_DIR=./data/parquet
+USERS_PARQUET_PATH=./data/parquet/users.parquet
+PRODUCTS_PARQUET_PATH=./data/parquet/products.parquet
+TRANSACTIONS_PARQUET_PATH=./data/parquet/transactions.parquet
+INTERACTIONS_PARQUET_PATH=./data/parquet/interactions.parquet
 SESSION_GAP_MINUTES=30
 ```
 
@@ -48,10 +52,10 @@ Initialize the schema only:
 ./.venv/bin/recommender-stage1 init-db
 ```
 
-Load the workbook into the source tables:
+Load the parquet files into the source tables:
 
 ```bash
-./.venv/bin/recommender-stage1 load-source
+./.venv/bin/recommender-stage1 load-parquet --source-dir ./data/parquet
 ```
 
 Build derived tables:

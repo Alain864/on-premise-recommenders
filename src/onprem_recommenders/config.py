@@ -40,9 +40,25 @@ class Settings(BaseSettings):
         default="text-embedding-3-small",
         validation_alias="OPENAI_EMBEDDING_MODEL",
     )
-    source_workbook: Path = Field(
-        default=Path("sample_data.xlsx"),
-        validation_alias="SOURCE_WORKBOOK",
+    source_data_dir: Path = Field(
+        default=Path("./data/parquet"),
+        validation_alias="SOURCE_DATA_DIR",
+    )
+    users_parquet_path: Path | None = Field(
+        default=None,
+        validation_alias="USERS_PARQUET_PATH",
+    )
+    products_parquet_path: Path | None = Field(
+        default=None,
+        validation_alias="PRODUCTS_PARQUET_PATH",
+    )
+    transactions_parquet_path: Path | None = Field(
+        default=None,
+        validation_alias="TRANSACTIONS_PARQUET_PATH",
+    )
+    interactions_parquet_path: Path | None = Field(
+        default=None,
+        validation_alias="INTERACTIONS_PARQUET_PATH",
     )
     session_gap_minutes: int = Field(
         default=30,
@@ -57,10 +73,17 @@ class Settings(BaseSettings):
         Path("var").mkdir(exist_ok=True)
         self.chroma_persist_directory.mkdir(parents=True, exist_ok=True)
 
+    def parquet_paths(self) -> dict[str, Path]:
+        return {
+            "users": self.users_parquet_path or self.source_data_dir / "users.parquet",
+            "products": self.products_parquet_path or self.source_data_dir / "products.parquet",
+            "transactions": self.transactions_parquet_path or self.source_data_dir / "transactions.parquet",
+            "interactions": self.interactions_parquet_path or self.source_data_dir / "interactions.parquet",
+        }
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     settings = Settings()
     settings.ensure_local_dirs()
     return settings
-
