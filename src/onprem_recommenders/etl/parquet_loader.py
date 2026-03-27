@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 from sqlalchemy.engine import Engine
 
@@ -36,6 +37,10 @@ def load_parquet_frames(source_paths: dict[str, Path]) -> dict[str, pd.DataFrame
 
     products = _read_parquet_file(source_paths["products"], "products")
     products["price"] = products["price"].astype(float)
+    # Convert category_path from numpy arrays to delimited strings
+    products["category_path"] = products["category_path"].apply(
+        lambda x: " > ".join(x) if isinstance(x, (list, np.ndarray)) else x
+    )
 
     transactions = _read_parquet_file(source_paths["transactions"], "transactions")
     transactions["timestamp"] = pd.to_datetime(transactions["timestamp"], utc=False)

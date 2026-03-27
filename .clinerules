@@ -1,0 +1,137 @@
+# On-Premise Recommenders - Project Rules
+
+## Project Overview
+
+This is a proof-of-concept search and recommendation system for an e-commerce platform. The system implements four ML-powered features:
+
+1. **Personalized Homepage Feed** - Product recommendations based on user's purchase history, viewed products, and category interests
+2. **Personalized Query Autocomplete** - Tailored search suggestions based on user profile and behavior
+3. **Search Results Ranking** - Intelligent product ranking using relevance, popularity, inventory, and reviews
+4. **Product Page Recommenders** - Cross-sell ("Frequently Bought Together") and up-sell ("Customers Also Viewed") modules
+
+## Tech Stack
+
+- **Language**: Python 3.12+
+- **Web Framework**: FastAPI
+- **Database**: SQLAlchemy (SQLite for local dev, PostgreSQL-ready for production)
+- **Search Engine**: Elasticsearch
+- **Vector Store**: ChromaDB
+- **Embeddings**: OpenAI text-embedding-3-small
+- **CLI Framework**: Typer
+- **Data Processing**: Pandas, PyArrow
+
+## Project Structure
+
+```
+src/onprem_recommenders/
+├── __init__.py
+├── cli.py              # Typer CLI commands
+├── config.py           # Pydantic settings configuration
+├── db.py               # Database connection management
+├── main.py             # FastAPI application entry point
+├── models.py           # SQLAlchemy ORM models
+└── etl/
+    ├── __init__.py
+    ├── derived_tables.py    # Derived table computations
+    ├── embeddings.py        # OpenAI embedding generation
+    ├── parquet_loader.py    # Parquet file ingestion
+    └── search_index.py      # Elasticsearch sync
+```
+
+## Key Data Models
+
+### Source Tables
+- `users` - user_id, signup_date, country
+- `products` - product_id, title, brand, price, category_path, description
+- `transactions` - order_id, product_id, user_id, timestamp
+- `interactions` - event_type, user_id, product_id, query_text, timestamp
+
+### Derived Tables
+- `user_category_affinity` - purchase_count, view_count, add_to_cart_count, affinity_score
+- `product_stats` - view_count, ctr_proxy, conversion_rate, review_score, popularity_score
+- `co_purchase_pairs` - products frequently bought together
+- `co_view_pairs` - products frequently viewed together
+
+## Coding Standards
+
+### General
+- Use type hints for all function parameters and return values
+- Follow PEP 8 naming conventions (snake_case for variables/functions, PascalCase for classes)
+- Keep functions focused and under 50 lines where possible
+- Add docstrings to public functions and classes
+
+### Database
+- Use SQLAlchemy ORM models defined in `models.py`
+- **Current stage uses SQLite** (default: `sqlite+pysqlite:///./var/stage1.db`)
+- Code is PostgreSQL-ready for production deployment (set `DATABASE_URL` environment variable)
+- Ensure PostgreSQL compatibility (avoid SQLite-specific syntax)
+- Use migrations for schema changes in production
+
+### Configuration
+- Use `pydantic-settings` for environment variable management
+- All config via `config.py` using `Settings` class
+- Never hardcode secrets - use environment variables
+
+### Error Handling
+- Use `tenacity` for retry logic on external services
+- Graceful degradation - always have fallback recommendations
+- Log errors appropriately for debugging
+
+## Performance Requirements
+
+- **Latency**: All recommendations and autocomplete must respond in < 200ms (p95)
+- **Fallback**: Non-personalized fallbacks (trending, bestsellers) for cold-start users
+- **A/B Testing**: All features should be behind feature flags
+
+## Testing Guidelines
+
+- Test with SQLite locally before PostgreSQL deployment
+- Use sample data from `sample_data.xlsx` for integration tests
+- Mock external services (OpenAI, Elasticsearch) in unit tests
+
+## CLI Commands
+
+```bash
+# Initialize database schema
+recommender-stage1 init-db
+
+# Load parquet data
+recommender-stage1 load-parquet --source-dir ./data/parquet
+
+# Build derived tables
+recommender-stage1 build-derived
+
+# Sync to Elasticsearch
+recommender-stage1 sync-search
+
+# Sync embeddings to ChromaDB
+recommender-stage1 sync-embeddings
+
+# Full pipeline
+recommender-stage1 run-stage1 --source-dir ./data/parquet
+```
+
+## Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| DATABASE_URL | Database connection string | SQLite local path |
+| ELASTICSEARCH_URL | Elasticsearch endpoint | http://localhost:9200 |
+| ELASTICSEARCH_INDEX | Products index name | products |
+| CHROMA_PERSIST_DIRECTORY | ChromaDB storage path | ./var/chroma |
+| CHROMA_COLLECTION | Embedding collection name | product_embeddings |
+| OPENAI_EMBEDDING_MODEL | OpenAI embedding model | text-embedding-3-small |
+| SOURCE_DATA_DIR | Parquet files directory | ./data/parquet |
+| SESSION_GAP_MINUTES | Session gap threshold | 30 |
+
+## Important Notes
+
+- Review data not yet available - `product_stats.review_score`, `review_count`, and `in_stock` use prototype defaults
+- System designed for on-premise deployment (no cloud vendor lock-in)
+- Logging all impressions and clicks is required for model retraining pipeline
+
+## Future Phases
+
+- Phase 2: User personalization in search ranking
+- Phase 2: Real-time embedding updates
+- Phase 2: A/B testing infrastructure integration
