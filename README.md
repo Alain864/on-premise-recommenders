@@ -2,49 +2,82 @@
 
 Stage 1 implements the data foundation for the search and recommendation prototype:
 
-- ingest source data from four parquet files: `users.parquet`, `products.parquet`, `transactions.parquet`, and `interactions.parquet`
-- materialize source and derived tables in SQL
-- compute `user_category_affinity`, `product_stats`, `co_purchase_pairs`, and `co_view_pairs`
-- sync products into Elasticsearch
-- generate OpenAI embeddings and persist them in ChromaDB
+- Ingest source data from four parquet files: `users.parquet`, `products.parquet`, `transactions.parquet`, and `interactions.parquet`
+- Materialize source and derived tables in SQL
+- Compute `user_category_affinity`, `product_stats`, `co_purchase_pairs`, and `co_view_pairs`
+- Sync products into Elasticsearch
+- Generate OpenAI embeddings and persist them in ChromaDB
+
+## Prerequisites
+
+- Python 3.12+
+- Docker (for Elasticsearch)
+- OpenAI API key
 
 ## Quick start
 
-Install the project in the virtualenv:
+### 1. Install dependencies
 
 ```bash
 ./.venv/bin/pip install setuptools wheel
 ./.venv/bin/pip install -e . --no-build-isolation
 ```
 
-Run the Stage 1 pipeline locally with parquet source files and a SQLite database:
+### 2. Start Elasticsearch
 
 ```bash
-./.venv/bin/recommender-stage1 run-stage1 --source-dir ./data/parquet --skip-search --skip-embeddings
+docker-compose up -d
 ```
 
-That creates a local prototype database at `var/stage1.db`.
+Wait for Elasticsearch to be ready (usually 30-60 seconds):
+
+```bash
+curl -s http://localhost:9200/_cluster/health | jq .status
+# Should return "green" or "yellow"
+```
+
+### 3. Configure environment
+
+Create a `.env` file with your OpenAI API key:
+
+```bash
+cp .env.example .env
+# Edit .env and add your OpenAI API key
+```
+
+Required settings:
+
+```
+OPENAI_API_KEY=sk-your-api-key-here
+ELASTICSEARCH_URL=http://localhost:9200
+```
+
+### 4. Run the Stage 1 pipeline
+
+```bash
+./.venv/bin/recommender-stage1 run-stage1 --source-dir ./data/parquet
+```
+
+This creates a local prototype database at `var/stage1.db`, syncs products to Elasticsearch, and generates embeddings in ChromaDB.
 
 ## Environment variables
 
-Optional environment variables:
+All configuration is handled via environment variables (loaded from `.env` file):
 
-```bash
-DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/recommenders
-ELASTICSEARCH_URL=http://localhost:9200
-ELASTICSEARCH_INDEX=products
-CHROMA_PERSIST_DIRECTORY=./var/chroma
-CHROMA_COLLECTION=product_embeddings
-OPENAI_EMBEDDING_MODEL=text-embedding-3-small
-SOURCE_DATA_DIR=./data/parquet
-USERS_PARQUET_PATH=./data/parquet/users.parquet
-PRODUCTS_PARQUET_PATH=./data/parquet/products.parquet
-TRANSACTIONS_PARQUET_PATH=./data/parquet/transactions.parquet
-INTERACTIONS_PARQUET_PATH=./data/parquet/interactions.parquet
-SESSION_GAP_MINUTES=30
-```
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `DATABASE_URL` | Database connection string | `sqlite+pysqlite:///./var/stage1.db` |
+| `ELASTICSEARCH_URL` | Elasticsearch endpoint | `http://localhost:9200` |
+| `ELASTICSEARCH_INDEX` | Products index name | `products` |
+| `CHROMA_PERSIST_DIRECTORY` | ChromaDB storage path | `./var/chroma` |
+| `CHROMA_COLLECTION` | Embedding collection name | `product_embeddings` |
+| `OPENAI_API_KEY` | OpenAI API key (required for embeddings) | - |
+| `OPENAI_EMBEDDING_MODEL` | OpenAI embedding model | `text-embedding-3-small` |
+| `SOURCE_DATA_DIR` | Parquet files directory | `./data/parquet` |
+| `SESSION_GAP_MINUTES` | Session gap threshold | `30` |
+| `EMBEDDING_BATCH_SIZE` | OpenAI batch size | `50` |
 
-## Useful commands
+## CLI commands
 
 Initialize the schema only:
 
@@ -64,11 +97,54 @@ Build derived tables:
 ./.venv/bin/recommender-stage1 build-derived
 ```
 
-Sync external stores when services are running:
+Sync external stores (requires Elasticsearch and OpenAI API key):
 
 ```bash
 ./.venv/bin/recommender-stage1 sync-search
 ./.venv/bin/recommender-stage1 sync-embeddings
+```
+
+Run full Stage 1 pipeline:
+
+```bash
+./.venv/bin/recommender-stage1 run-stage1 --source-dir ./data/parquet
+```
+
+## Development without external services
+
+For local development without Elasticsearch or OpenAI:
+
+```bash
+# Database and derived tables only
+./.venv/bin/recommender-stage1 run-stage1 --source-dir ./data/parquet --skip-search --skip-embeddings
+```
+
+Note: Skipping services limits functionality:
+- Without Elasticsearch: full-text search and autocomplete unavailable
+- Without OpenAI: semantic search unavailable
+
+## Docker services
+
+The `docker-compose.yml` provides:
+
+- **Elasticsearch** (port 9200) - Full-text search index
+
+Start services:
+
+```bash
+docker-compose up -d
+```
+
+Stop services:
+
+```bash
+docker-compose down
+```
+
+Stop and remove volumes:
+
+```bash
+docker-compose down -v
 ```
 
 ## Notes

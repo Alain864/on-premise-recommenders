@@ -14,14 +14,21 @@ def _chunked(rows: list[dict], size: int) -> Iterable[list[dict]]:
         yield rows[start : start + size]
 
 
+# Max tokens for text-embedding-3-small is 8192
+# Approximating 1 token ≈ 4 characters, we use ~7000 chars to stay safely under
+MAX_EMBEDDING_CHARS = 7000
+
+
 def _embedding_text(record: dict) -> str:
-    return " | ".join(
+    text = " | ".join(
         [
             str(record["title"]).strip(),
             str(record["category_path"]).strip(),
             str(record["description"]).strip(),
         ]
     )
+    # Truncate to stay under OpenAI token limit
+    return text[:MAX_EMBEDDING_CHARS]
 
 
 @retry(wait=wait_exponential(min=1, max=20), stop=stop_after_attempt(3))
