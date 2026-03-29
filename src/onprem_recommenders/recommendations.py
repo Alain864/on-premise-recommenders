@@ -15,6 +15,8 @@ from sqlalchemy.orm import Session
 from onprem_recommenders.config import get_settings
 from onprem_recommenders.db import create_db_engine
 from onprem_recommenders.models import (
+    CoPurchasePair,
+    CoViewPair,
     Product,
     ProductStats,
     Transaction,
@@ -329,4 +331,297 @@ def get_homepage_recommendations(
         user_id=user_id,
         rows=recommendation_rows[:rows],
         is_personalized=True,
+    )
+
+
+# Product Page Recommenders Response Models
+class ProductPageResponse(BaseModel):
+    """Response model for product page recommendations."""
+
+    product_id: str
+    recommendations: list[ProductItem]
+    recommendation_type: str
+    fallback: bool
+
+
+def get_co_purchase_products(
+    session: Session, product_id: str, limit: int = 10
+) -> list[tuple[str, int]]:
+    """Get products frequently bought together with the given product.
+
+    Returns list of (product_id, pair_count) tuples sorted by pair_count descending.
+    """
+    # Query both left and right sides of the co-purchase pair
+    # Left side: current product is left_product_id
+    result_left = session.execute(
+        select(CoPurchasePair)
+        .where(CoPurchasePair.left_product_id == product_id)
+        .order_by(CoPurchasePair.pair_count.desc())
+        .limit(limit)
+    )
+    left_pairs = [(row.right_product_id, row.pair_count) for row in result_left.scalars().all()]
+
+    # Right side: current product is right_product_id
+    result_right = session.execute(
+        select(CoPurchasePair)
+        .where(CoPurchasePair.right_product_id == product_id)
+        .order_by(CoPurchasePair.pair_count.desc())
+        .limit(limit)
+    )
+    right_pairs = [(row.left_product_id, row.pair_count) for row in result_right.scalars().all()]
+
+    # Merge and deduplicate, keeping highest count
+    merged: dict[str, int] = {}
+    for pid, count in left_pairs + right_pairs:
+        if pid not in merged or merged[pid] < count:
+            merged[pid] = count
+
+    # Sort by count descending and return
+    return sorted(merged.items(), key=lambda x: x[1], reverse=True)[:limit]
+
+
+def get_co_view_products(
+    session: Session, product_id: str, limit: int = 10
+) -> list[tuple[str, int]]:
+    """Get products frequently viewed together with the given product.
+
+    Returns list of (product_id, pair_count) tuples sorted by pair_count descending.
+    """
+    # Query both left and right sides of the co-view pair
+    result_left = session.execute(
+        select(CoViewPair)
+        .where(CoViewPair.left_product_id == product_id)
+        .order_by(CoViewPair.pair_count.desc())
+        .limit(limit)
+    )
+    left_pairs = [(row.right_product_id, row.pair_count) for row in result_left.scalars().all()]
+
+    result_right = session.execute(
+        select(CoViewPair)
+        .where(CoViewPair.right_product_id == product_id)
+        .order_by(CoViewPair.pair_count.desc())
+        .limit(limit)
+    )
+    right_pairs = [(row.left_product_id, row.pair_count) for row in result_right.scalars().all()]
+
+    # Merge and deduplicate, keeping highest count
+    merged: dict[str, int] = {}
+    for pid, count in left_pairs + right_pairs:
+        if pid not in merged or merged[pid] < count:
+            merged[pid] = count
+
+    return sorted(merged.items(), key=lambda x: x[1], reverse=True)[:limit]
+
+
+def fetch_products_by_ids(
+    client: Elasticsearch,
+    product_ids: list[str],
+    index_name: str = "products",
+) -> list[dict[str, Any]]:
+    """Fetch products by IDs from Elasticsearch, preserving order."""
+    if not product_ids:
+        return []
+
+    query = {
+        "query": {
+            "terms": {
+                "product_id": product_ids
+            }
+        },
+        "size": len(product_ids),
+    }
+
+    response = client.search(index=index_name, body=query)
+
+    # Create a map for quick lookup
+    products_map: dict[str, dict[str, Any]] = {}
+    for hit in response["hits"]["hits"]:
+        source = hit["_source"]
+        products_map[source["product_id"]] = {
+            "product_id": source["product_id"],
+            "title": source["title"],
+            "brand": source["brand"],
+            "price": source["price"],
+            "category_path": source["category_path"],
+            "popularity_score": source.get("popularity_score", 0.0),
+        }
+
+    # Return in requested order (filtering out missing products)
+    return [products_map[pid] for pid in product_ids if pid in products_map]
+
+
+def get_product_category(
+    client: Elasticsearch,
+    product_id: str,
+    index_name: str = "products",
+) -> str | None:
+    """Get the category path for a product."""
+    query = {
+        "query": {
+            "term": {
+                "product_id": product_id
+            }
+        },
+        "_source": ["category_path"],
+        "size": 1,
+    }
+
+    response = client.search(index=index_name, body=query)
+    hits = response.get("hits", {}).get("hits", [])
+    if hits:
+        return hits[0]["_source"].get("category_path")
+    return None
+
+
+@router.get("/product/{product_id}/frequently-bought-together", response_model=ProductPageResponse)
+def get_frequently_bought_together(
+    product_id: str,
+    limit: int = Query(10, ge=1, le=50, description="Number of recommendations"),
+) -> ProductPageResponse:
+    """Get products frequently bought together with the given product.
+
+    Cross-sell recommendation module for product detail pages.
+
+    Uses co-purchase data to find products that are commonly purchased
+    together. Falls back to products from the same category sorted by
+    popularity if no co-purchase data exists.
+    """
+    engine = get_engine()
+    client = get_elasticsearch_client()
+    settings = get_settings()
+
+    # Get co-purchase products from database
+    with Session(engine) as session:
+        co_purchase_pairs = get_co_purchase_products(session, product_id, limit=limit)
+
+    # If we have co-purchase data, fetch product details
+    if co_purchase_pairs:
+        product_ids = [pid for pid, _ in co_purchase_pairs]
+        products = fetch_products_by_ids(
+            client,
+            product_ids,
+            index_name=settings.elasticsearch_index,
+        )
+
+        if products:
+            return ProductPageResponse(
+                product_id=product_id,
+                recommendations=[ProductItem(**p) for p in products],
+                recommendation_type="frequently_bought_together",
+                fallback=False,
+            )
+
+    # Fallback: Get products from the same category
+    category_path = get_product_category(
+        client, product_id, index_name=settings.elasticsearch_index
+    )
+
+    if category_path:
+        fallback_products = fetch_products_by_category(
+            client,
+            category_path,
+            excluded_ids={product_id},
+            size=limit,
+            index_name=settings.elasticsearch_index,
+        )
+
+        if fallback_products:
+            return ProductPageResponse(
+                product_id=product_id,
+                recommendations=[ProductItem(**p) for p in fallback_products],
+                recommendation_type="frequently_bought_together",
+                fallback=True,
+            )
+
+    # Last resort: trending products
+    trending = fetch_trending_products(
+        client,
+        size=limit,
+        index_name=settings.elasticsearch_index,
+    )
+    # Filter out the current product
+    trending = [p for p in trending if p["product_id"] != product_id]
+
+    return ProductPageResponse(
+        product_id=product_id,
+        recommendations=[ProductItem(**p) for p in trending[:limit]],
+        recommendation_type="frequently_bought_together",
+        fallback=True,
+    )
+
+
+@router.get("/product/{product_id}/customers-also-viewed", response_model=ProductPageResponse)
+def get_customers_also_viewed(
+    product_id: str,
+    limit: int = Query(10, ge=1, le=50, description="Number of recommendations"),
+) -> ProductPageResponse:
+    """Get products frequently viewed together with the given product.
+
+    Up-sell recommendation module for product detail pages.
+
+    Uses co-view data to find products that are commonly viewed in the
+    same session. Falls back to products from related categories sorted by
+    popularity if no co-view data exists.
+    """
+    engine = get_engine()
+    client = get_elasticsearch_client()
+    settings = get_settings()
+
+    # Get co-view products from database
+    with Session(engine) as session:
+        co_view_pairs = get_co_view_products(session, product_id, limit=limit)
+
+    # If we have co-view data, fetch product details
+    if co_view_pairs:
+        product_ids = [pid for pid, _ in co_view_pairs]
+        products = fetch_products_by_ids(
+            client,
+            product_ids,
+            index_name=settings.elasticsearch_index,
+        )
+
+        if products:
+            return ProductPageResponse(
+                product_id=product_id,
+                recommendations=[ProductItem(**p) for p in products],
+                recommendation_type="customers_also_viewed",
+                fallback=False,
+            )
+
+    # Fallback: Get products from the same category
+    category_path = get_product_category(
+        client, product_id, index_name=settings.elasticsearch_index
+    )
+
+    if category_path:
+        fallback_products = fetch_products_by_category(
+            client,
+            category_path,
+            excluded_ids={product_id},
+            size=limit,
+            index_name=settings.elasticsearch_index,
+        )
+
+        if fallback_products:
+            return ProductPageResponse(
+                product_id=product_id,
+                recommendations=[ProductItem(**p) for p in fallback_products],
+                recommendation_type="customers_also_viewed",
+                fallback=True,
+            )
+
+    # Last resort: trending products
+    trending = fetch_trending_products(
+        client,
+        size=limit,
+        index_name=settings.elasticsearch_index,
+    )
+    # Filter out the current product
+    trending = [p for p in trending if p["product_id"] != product_id]
+
+    return ProductPageResponse(
+        product_id=product_id,
+        recommendations=[ProductItem(**p) for p in trending[:limit]],
+        recommendation_type="customers_also_viewed",
+        fallback=True,
     )

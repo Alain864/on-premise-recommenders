@@ -30,6 +30,7 @@ src/onprem_recommenders/
 ├── db.py               # Database connection management
 ├── main.py             # FastAPI application entry point
 ├── models.py           # SQLAlchemy ORM models
+├── recommendations.py  # Stage 2: Personalized homepage recommendations API
 └── etl/
     ├── __init__.py
     ├── derived_tables.py    # Derived table computations
@@ -130,8 +131,61 @@ recommender-stage1 run-stage1 --source-dir ./data/parquet
 - System designed for on-premise deployment (no cloud vendor lock-in)
 - Logging all impressions and clicks is required for model retraining pipeline
 
+## API Endpoints (Stage 2)
+
+### Homepage Recommendations
+
+```
+GET /recommendations/homepage
+```
+
+Query parameters:
+- `user_id` (optional): User ID for personalization. If omitted, returns trending products.
+- `rows` (default=3, range 1-10): Number of recommendation rows
+- `products_per_row` (default=10, range 1-50): Products per row
+
+Response:
+```json
+{
+  "user_id": "USR_13914CAFA179",
+  "rows": [
+    {
+      "row_label": "Recommended in AC Adapters (Electronics)",
+      "products": [
+        {
+          "product_id": "...",
+          "title": "...",
+          "brand": "...",
+          "price": 14.99,
+          "category_path": "...",
+          "popularity_score": 3.93
+        }
+      ]
+    }
+  ],
+  "is_personalized": true
+}
+```
+
+Behavior:
+- **Known user with affinity data**: Returns personalized recommendations from user's top affinity categories, excluding already-purchased products
+- **Known user without affinity data (cold-start)**: Falls back to trending products by category
+- **Anonymous user**: Returns trending products by category
+
+Example test commands:
+```bash
+# Personalized recommendations for a known user
+curl -s "http://127.0.0.1:8000/recommendations/homepage?user_id=USR_13914CAFA179&rows=2&products_per_row=5" | jq .
+
+# Anonymous user (trending products)
+curl -s "http://127.0.0.1:8000/recommendations/homepage?rows=2&products_per_row=5" | jq .
+
+# Find valid user IDs
+sqlite3 var/stage1.db "SELECT DISTINCT user_id FROM user_category_affinity LIMIT 10;"
+```
+
 ## Future Phases
 
-- Phase 2: User personalization in search ranking
-- Phase 2: Real-time embedding updates
-- Phase 2: A/B testing infrastructure integration
+- Phase 3: User personalization in search ranking
+- Phase 3: Real-time embedding updates
+- Phase 3: A/B testing infrastructure integration

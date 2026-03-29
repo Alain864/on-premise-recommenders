@@ -2,6 +2,10 @@
 
 ### Elasticsearch Queries
 
+```bash
+docker compose up -d
+```
+
 **1. Basic text search - find products matching "laptop":**
 ```bash
 curl -s "http://localhost:9200/products/_search?q=laptop&size=5" | jq '.hits.hits[]._source.title'
@@ -123,3 +127,57 @@ sqlite3 ./var/stage1.db "SELECT * FROM co_purchase_pairs LIMIT 5;"
 ```bash
 sqlite3 ./var/stage1.db "SELECT p.title, ps.view_count, ps.popularity_score FROM product_stats ps JOIN products p ON ps.product_id = p.product_id ORDER BY ps.view_count DESC LIMIT 10;"
 ```
+
+**Explore database**
+# View all tables
+sqlite3 ./var/stage1.db ".tables"
+
+# View table schema
+sqlite3 ./var/stage1.db ".schema products"
+
+# Query data (after running load-parquet)
+sqlite3 ./var/stage1.db "SELECT * FROM products LIMIT 5;"
+
+### Stage 2
+
+**Anonymous user (trending products)**
+curl -s "http://127.0.0.1:8000/recommendations/homepage?rows=2&products_per_row=5" | jq .
+
+**Specific user (personalized if affinity data exists)**
+curl -s "http://127.0.0.1:8000/recommendations/homepage?user_id=USER1&rows=2&products_per_row=5" | jq .
+
+curl -s "http://127.0.0.1:8000/recommendations/homepage?user_id=USR_13914CAFA179&rows=2&products_per_row=5" | jq .
+
+# Different user with affinity for Tablet Cases
+curl -s "http://127.0.0.1:8000/recommendations/homepage?user_id=USR_C897116EBA13&rows=2&products_per_row=5" | jq .
+
+# Another user with affinity for Remote Controls
+curl -s "http://127.0.0.1:8000/recommendations/homepage?user_id=USR_5FC06B275F9F&rows=2&products_per_row=5" | jq .
+
+### Stage 3 - Feature 4: Product Page Recommenders
+
+**Frequently Bought Together (cross-sell)**
+# Get products frequently bought together with a specific product
+curl -s "http://127.0.0.1:8000/recommendations/product/B00004Z5V3/frequently-bought-together?limit=5" | jq .
+
+# Test with a product that has co-purchase data
+curl -s "http://127.0.0.1:8000/recommendations/product/B00NUXY870/frequently-bought-together?limit=5" | jq .
+
+# Unknown product (shows fallback behavior - returns trending products)
+curl -s "http://127.0.0.1:8000/recommendations/product/UNKNOWN_PRODUCT/frequently-bought-together?limit=5" | jq .
+
+**Customers Also Viewed (up-sell)**
+# Get products frequently viewed together with a specific product
+curl -s "http://127.0.0.1:8000/recommendations/product/B000FW6MIW/customers-also-viewed?limit=5" | jq .
+
+# Test with another product that has co-view data
+curl -s "http://127.0.0.1:8000/recommendations/product/B000HN2ZBC/customers-also-viewed?limit=5" | jq .
+
+# Unknown product (shows fallback behavior - returns trending products)
+curl -s "http://127.0.0.1:8000/recommendations/product/UNKNOWN_PRODUCT/customers-also-viewed?limit=5" | jq .
+
+**Query co-purchase pairs directly**
+sqlite3 ./var/stage1.db "SELECT left_product_id, right_product_id, pair_count FROM co_purchase_pairs ORDER BY pair_count DESC LIMIT 10;"
+
+**Query co-view pairs directly**
+sqlite3 ./var/stage1.db "SELECT left_product_id, right_product_id, pair_count FROM co_view_pairs ORDER BY pair_count DESC LIMIT 10;"

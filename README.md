@@ -1,5 +1,9 @@
 # On-Premise Recommenders
 
+A proof-of-concept search and recommendation system for an e-commerce platform.
+
+## Stage 1: Data Foundation
+
 Stage 1 implements the data foundation for the search and recommendation prototype:
 
 - Ingest source data from four parquet files: `users.parquet`, `products.parquet`, `transactions.parquet`, and `interactions.parquet`
@@ -7,6 +11,14 @@ Stage 1 implements the data foundation for the search and recommendation prototy
 - Compute `user_category_affinity`, `product_stats`, `co_purchase_pairs`, and `co_view_pairs`
 - Sync products into Elasticsearch
 - Generate OpenAI embeddings and persist them in ChromaDB
+
+## Stage 2: Personalized Homepage Feed API
+
+Stage 2 implements the personalized homepage recommendations endpoint:
+
+- **Anonymous users**: Returns trending products by category
+- **Known users with affinity data**: Returns personalized recommendations from user's top affinity categories, excluding already-purchased products
+- **Cold-start users (no affinity data)**: Falls back to trending products
 
 ## Prerequisites
 
@@ -122,6 +134,66 @@ For local development without Elasticsearch or OpenAI:
 Note: Skipping services limits functionality:
 - Without Elasticsearch: full-text search and autocomplete unavailable
 - Without OpenAI: semantic search unavailable
+
+## Running the API Server
+
+Start the FastAPI server:
+
+```bash
+./.venv/bin/uvicorn onprem_recommenders.main:app --reload
+```
+
+The API will be available at `http://127.0.0.1:8000`.
+
+### API Endpoints
+
+#### Homepage Recommendations
+
+```
+GET /recommendations/homepage
+```
+
+Query parameters:
+- `user_id` (optional): User ID for personalization. If omitted, returns trending products.
+- `rows` (default=3, range 1-10): Number of recommendation rows
+- `products_per_row` (default=10, range 1-50): Products per row
+
+Example requests:
+
+```bash
+# Personalized recommendations for a known user
+curl -s "http://127.0.0.1:8000/recommendations/homepage?user_id=USR_13914CAFA179&rows=2&products_per_row=5" | jq .
+
+# Anonymous user (trending products)
+curl -s "http://127.0.0.1:8000/recommendations/homepage?rows=2&products_per_row=5" | jq .
+
+# Find valid user IDs with affinity data
+sqlite3 var/stage1.db "SELECT DISTINCT user_id FROM user_category_affinity LIMIT 10;"
+```
+
+Response format:
+
+```json
+{
+  "user_id": "USR_13914CAFA179",
+  "rows": [
+    {
+      "row_label": "Recommended in AC Adapters (Electronics)",
+      "products": [
+        {
+          "product_id": "B08KXZXCL6",
+          "title": "Product title...",
+          "brand": "Brand name",
+          "price": 14.99,
+          "category_path": "Electronics > Computers & Accessories > ...",
+          "popularity_score": 3.93
+        }
+      ]
+    }
+  ],
+  "is_personalized": true
+}
+```
 
 ## Docker services
 
