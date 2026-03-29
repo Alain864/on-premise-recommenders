@@ -41,6 +41,10 @@ def load_parquet_frames(source_paths: dict[str, Path]) -> dict[str, pd.DataFrame
     products["category_path"] = products["category_path"].apply(
         lambda x: " > ".join(x) if isinstance(x, (list, np.ndarray)) else x
     )
+    # Convert description from numpy arrays to strings (parquet stores single strings as arrays)
+    products["description"] = products["description"].apply(
+        lambda x: x[0] if isinstance(x, (list, np.ndarray)) and len(x) > 0 else (x if isinstance(x, str) else None)
+    )
 
     transactions = _read_parquet_file(source_paths["transactions"], "transactions")
     transactions["timestamp"] = pd.to_datetime(transactions["timestamp"], utc=False)
@@ -62,10 +66,17 @@ def _records(frame: pd.DataFrame) -> list[dict[str, Any]]:
     records = frame.to_dict(orient="records")
     for record in records:
         for key, value in list(record.items()):
-            if pd.isna(value):
-                record[key] = None
-            elif hasattr(value, "to_pydatetime"):
-                record[key] = value.to_pydatetime()
+            # Handle numpy arrays - should not be treated as NA
+            if isinstance(value, np.ndarray):
+                continue
+            try:
+                if pd.isna(value):
+                    record[key] = None
+                elif hasattr(value, "to_pydatetime"):
+                    record[key] = value.to_pydatetime()
+            except ValueError:
+                # pd.isna() failed (e.g., for array-like), skip NA check
+                pass
     return records
 
 

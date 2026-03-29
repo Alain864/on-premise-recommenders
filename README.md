@@ -75,3 +75,12 @@ Sync external stores when services are running:
 
 - The sample data does not include review or stock feeds yet, so `product_stats.review_score`, `product_stats.review_count`, and `product_stats.in_stock` use sensible prototype defaults.
 - The code is PostgreSQL-ready, but defaults to SQLite so the sample pipeline can run immediately in a fresh local environment.
+
+## Parquet file format
+
+The `products.parquet` file should contain a `category_path` column. This column can be either:
+
+- A **list or numpy array** of category strings (e.g., `['Electronics', 'Computers & Accessories', 'Monitors']`) — this is the preferred format and will be automatically converted to a delimited string.
+- A **string** with categories separated by ` > ` (e.g., `"Electronics > Computers & Accessories > Monitors"`).
+
+The loader will automatically convert array/list values to the `" > "`-delimited string format expected by the database schema (`String(512)`). The resulting string length must not exceed 512 characters.
