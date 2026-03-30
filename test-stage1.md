@@ -188,3 +188,48 @@ curl -s "http://127.0.0.1:8000/recommendations/search?q=adapter&size=5" | jq .
 
 # Personalized search
 curl -s "http://127.0.0.1:8000/recommendations/search?q=cable&user_id=USR_13914CAFA179&size=5" | jq .
+
+### Stage 5 - Feature 2: Personalized Query Autocomplete
+
+**Prerequisites - Build autocomplete index (if not done)**
+```bash
+./.venv/bin/recommender-stage1 build-autocomplete
+```
+
+**Anonymous user (global popular queries)**
+```bash
+curl -s "http://127.0.0.1:8000/autocomplete/suggest?prefix=sm&limit=5" | jq .
+```
+
+**Personalized suggestions for known user**
+```bash
+curl -s "http://127.0.0.1:8000/autocomplete/suggest?prefix=sm&user_id=USR_13914CAFA179&limit=5" | jq .
+```
+
+**Test different prefixes**
+```bash
+# Electronics queries
+curl -s "http://127.0.0.1:8000/autocomplete/suggest?prefix=lap&limit=5" | jq .
+curl -s "http://127.0.0.1:8000/autocomplete/suggest?prefix=wire&limit=5" | jq .
+curl -s "http://127.0.0.1:8000/autocomplete/suggest?prefix=blue&limit=5" | jq .
+
+# With different users
+curl -s "http://127.0.0.1:8000/autocomplete/suggest?prefix=phone&user_id=USR_C897116EBA13&limit=5" | jq .
+```
+
+**Query autocomplete data directly**
+```bash
+# View sample query suggestions
+sqlite3 ./var/stage1.db "SELECT query_text, frequency, category_path FROM query_suggestions ORDER BY frequency DESC LIMIT 10;"
+
+# Find queries for a specific category
+sqlite3 ./var/stage1.db "SELECT query_text, frequency FROM query_suggestions WHERE category_path LIKE '%Electronics%' ORDER BY frequency DESC LIMIT 10;"
+
+# Count total unique queries
+sqlite3 ./var/stage1.db "SELECT COUNT(DISTINCT query_text) FROM query_suggestions;"
+```
+
+**Expected behavior:**
+- **Anonymous requests**: Returns global popular queries sorted by frequency, `is_personalized: false`
+- **Known user with affinities**: Returns suggestions boosted by user's category preferences, `is_personalized: true`
+- **Unknown user**: Falls back to global popular queries

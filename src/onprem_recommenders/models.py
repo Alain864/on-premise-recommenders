@@ -92,3 +92,18 @@ class CoViewPair(Base):
     right_product_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     pair_count: Mapped[int] = mapped_column(Integer, nullable=False)
 
+
+class QuerySuggestion(Base):
+    """Stores query text with frequency for autocomplete suggestions.
+
+    Built from search interactions - aggregates query frequency globally
+    and per-category for personalized suggestions.
+    """
+
+    __tablename__ = "query_suggestions"
+
+    query_text: Mapped[str] = mapped_column(String(512), primary_key=True)
+    frequency: Mapped[int] = mapped_column(Integer, nullable=False)
+    category_path: Mapped[str | None] = mapped_column(String(512), nullable=True, primary_key=True)
+    last_updated: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+

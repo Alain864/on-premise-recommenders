@@ -6,6 +6,7 @@ import typer
 
 from .config import Settings, get_settings
 from .db import create_db_engine, init_db
+from .etl.autocomplete import materialize_query_suggestions
 from .etl.derived_tables import materialize_derived_tables
 from .etl.embeddings import sync_product_embeddings
 from .etl.parquet_loader import load_source_tables
@@ -113,6 +114,20 @@ def sync_embeddings_command(database_url: str | None = typer.Option(default=None
         batch_size=settings.embedding_batch_size,
     )
     typer.echo(f"Synced {synced} product embeddings into Chroma collection '{settings.chroma_collection}'")
+
+
+@app.command("build-autocomplete")
+def build_autocomplete_command(database_url: str | None = typer.Option(default=None)) -> None:
+    """Build query suggestions from search interactions for autocomplete.
+
+    Creates global and category-specific query frequency tables used by
+    the personalized autocomplete API.
+    """
+    settings = _resolve_settings(database_url=database_url)
+    engine = create_db_engine(settings.database_url)
+    init_db(engine)
+    count = materialize_query_suggestions(engine)
+    typer.echo(f"Built {count} query suggestions for autocomplete")
 
 
 @app.command("run-stage1")

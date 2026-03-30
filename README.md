@@ -38,6 +38,14 @@ Stage 4 implements intelligent search result ranking:
 - **Personalization**: Known users get boosted results in their affinity categories
 - **Semantic fallback**: Falls back to ChromaDB vector search when BM25 results are weak
 
+## Stage 5: Personalized Query Autocomplete
+
+Stage 5 implements personalized autocomplete suggestions:
+
+- **Anonymous users**: Returns globally popular queries matching the prefix
+- **Known users with affinity data**: Returns personalized suggestions boosted by category preferences
+- **Prefix matching**: Fast case-insensitive prefix search for query completion
+
 ## Prerequisites
 
 - Python 3.12+
@@ -316,6 +324,81 @@ The ranking algorithm combines:
 - **In-stock boost** (10%): Availability factor
 
 For personalized results, users with category affinity get boosted results in their preferred categories.
+
+#### Query Autocomplete
+
+```
+GET /autocomplete/suggest
+```
+
+Query parameters:
+- `prefix` (required, min 1 char): Search prefix to autocomplete
+- `user_id` (optional): User ID for personalization
+- `limit` (default=10, range 1-20): Maximum number of suggestions
+
+Example requests:
+
+```bash
+# Anonymous user (global popular queries)
+curl -s "http://127.0.0.1:8000/autocomplete/suggest?prefix=sm&limit=5" | jq .
+
+# Personalized suggestions for known user
+curl -s "http://127.0.0.1:8000/autocomplete/suggest?prefix=sm&user_id=USR_13914CAFA179&limit=5" | jq .
+```
+
+Response format (anonymous):
+
+```json
+{
+  "prefix": "sm",
+  "suggestions": [
+    {
+      "query_text": "smart plug",
+      "frequency": 139,
+      "relevance_score": 0.0,
+      "category_match": null
+    },
+    {
+      "query_text": "smartphone case",
+      "frequency": 110,
+      "relevance_score": 0.0,
+      "category_match": null
+    }
+  ],
+  "is_personalized": false,
+  "user_id": null
+}
+```
+
+Response format (personalized):
+
+```json
+{
+  "prefix": "sm",
+  "suggestions": [
+    {
+      "query_text": "smart speaker",
+      "frequency": 10,
+      "relevance_score": 0.2,
+      "category_match": "Electronics > Power Accessories > AC Adapters"
+    },
+    {
+      "query_text": "smart plug",
+      "frequency": 7,
+      "relevance_score": 0.112,
+      "category_match": "Electronics > Television & Video > Accessories > Remote Controls"
+    }
+  ],
+  "is_personalized": true,
+  "user_id": "USR_13914CAFA179"
+}
+```
+
+The autocomplete algorithm:
+- Matches queries that start with the given prefix (case-insensitive)
+- For known users: boosts queries from their top affinity categories
+- Scores by relevance (personalization boost + frequency)
+- Returns top N suggestions sorted by relevance
 
 ## Docker services
 

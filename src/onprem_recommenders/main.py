@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 
+from onprem_recommenders.autocomplete import router as autocomplete_router
 from onprem_recommenders.recommendations import router as recommendations_router
 
 
@@ -17,3 +18,4 @@ def health() -> dict[str, str]:
 
 # Include recommendation endpoints
 app.include_router(recommendations_router)
+app.include_router(autocomplete_router)
