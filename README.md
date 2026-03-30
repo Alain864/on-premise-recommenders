@@ -20,6 +20,24 @@ Stage 2 implements the personalized homepage recommendations endpoint:
 - **Known users with affinity data**: Returns personalized recommendations from user's top affinity categories, excluding already-purchased products
 - **Cold-start users (no affinity data)**: Falls back to trending products
 
+## Stage 3: Product Page Recommenders
+
+Stage 3 implements two product page recommendation modules:
+
+- **Frequently Bought Together**: Cross-sell recommendations using co-purchase data
+- **Customers Also Viewed**: Up-sell recommendations using co-view data
+
+Both endpoints fall back to products from the same category when collaborative data is unavailable.
+
+## Stage 4: Search Results Ranking
+
+Stage 4 implements intelligent search result ranking:
+
+- **BM25 text matching**: Initial candidate retrieval from Elasticsearch
+- **Weighted re-ranking**: Combines BM25 relevance (40%), popularity (25%), conversion rate (15%), review score (10%), and in-stock boost (10%)
+- **Personalization**: Known users get boosted results in their affinity categories
+- **Semantic fallback**: Falls back to ChromaDB vector search when BM25 results are weak
+
 ## Prerequisites
 
 - Python 3.12+
@@ -194,6 +212,110 @@ Response format:
   "is_personalized": true
 }
 ```
+
+#### Product Page Recommendations
+
+**Frequently Bought Together** (cross-sell):
+
+```
+GET /recommendations/product/{product_id}/frequently-bought-together
+```
+
+**Customers Also Viewed** (up-sell):
+
+```
+GET /recommendations/product/{product_id}/customers-also-viewed
+```
+
+Query parameters:
+- `limit` (default=10, range 1-50): Number of recommendations
+
+Example requests:
+
+```bash
+# Frequently bought together
+curl -s "http://127.0.0.1:8000/recommendations/product/B08KXZXCL6/frequently-bought-together?limit=5" | jq .
+
+# Customers also viewed
+curl -s "http://127.0.0.1:8000/recommendations/product/B08KXZXCL6/customers-also-viewed?limit=5" | jq .
+```
+
+Response format:
+
+```json
+{
+  "product_id": "B08KXZXCL6",
+  "recommendations": [
+    {
+      "product_id": "B08KXZXCL7",
+      "title": "Related product...",
+      "brand": "Brand name",
+      "price": 19.99,
+      "category_path": "Electronics > ...",
+      "popularity_score": 3.5
+    }
+  ],
+  "recommendation_type": "frequently_bought_together",
+  "fallback": false
+}
+```
+
+The `fallback` field indicates whether the results came from collaborative data (`false`) or same-category fallback (`true`).
+
+#### Search Results Ranking
+
+```
+GET /recommendations/search
+```
+
+Query parameters:
+- `q` (required): Search query string
+- `user_id` (optional): User ID for personalization
+- `size` (default=20, range 1-100): Number of results
+- `use_semantic` (default=true): Enable semantic search fallback
+
+Example requests:
+
+```bash
+# Basic search
+curl -s "http://127.0.0.1:8000/recommendations/search?q=adapter&size=5" | jq .
+
+# Personalized search
+curl -s "http://127.0.0.1:8000/recommendations/search?q=cable&user_id=USR_13914CAFA179&size=5" | jq .
+```
+
+Response format:
+
+```json
+{
+  "query": "adapter",
+  "user_id": null,
+  "results": [
+    {
+      "product_id": "B00KCKS1PO",
+      "title": "HQRP AC Adapter...",
+      "brand": "HQRP",
+      "price": 9.91,
+      "category_path": "Electronics > Power Accessories > AC Adapters",
+      "popularity_score": 2.56,
+      "bm25_score": 15.83,
+      "final_score": 0.83
+    }
+  ],
+  "total_hits": 5993,
+  "is_personalized": false,
+  "used_semantic_fallback": false
+}
+```
+
+The ranking algorithm combines:
+- **BM25 relevance** (40%): Text matching score from Elasticsearch
+- **Popularity** (25%): Log-scaled view/interaction score
+- **Conversion rate** (15%): Purchase conversion metric
+- **Review score** (10%): Average product rating
+- **In-stock boost** (10%): Availability factor
+
+For personalized results, users with category affinity get boosted results in their preferred categories.
 
 ## Docker services
 

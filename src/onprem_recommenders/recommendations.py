@@ -5,8 +5,10 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+import chromadb
 from elasticsearch import Elasticsearch
 from fastapi import APIRouter, Depends, HTTPException, Query
+from openai import OpenAI
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.engine import Engine
@@ -624,4 +626,339 @@ def get_customers_also_viewed(
         recommendations=[ProductItem(**p) for p in trending[:limit]],
         recommendation_type="customers_also_viewed",
         fallback=True,
+    )
+
+
+# Search Results Ranking Models
+class SearchProductItem(BaseModel):
+    """Product item with search ranking details."""
+
+    product_id: str
+    title: str
+    brand: str
+    price: float
+    category_path: str
+    popularity_score: float
+    bm25_score: float | None = None
+    final_score: float | None = None
+
+
+class SearchResponse(BaseModel):
+    """Response model for search results."""
+
+    query: str
+    user_id: str | None
+    results: list[SearchProductItem]
+    total_hits: int
+    is_personalized: bool
+    used_semantic_fallback: bool
+
+
+def get_product_stats_batch(
+    session: Session, product_ids: list[str]
+) -> dict[str, dict[str, Any]]:
+    """Get product stats for a batch of products.
+
+    Returns dict mapping product_id to stats dict.
+    """
+    result = session.execute(
+        select(ProductStats).where(ProductStats.product_id.in_(product_ids))
+    )
+    return {
+        row.product_id: {
+            "view_count": row.view_count,
+            "conversion_rate": row.conversion_rate,
+            "review_score": row.review_score or 3.0,  # Default neutral review
+            "in_stock": row.in_stock,
+            "popularity_score": row.popularity_score,
+        }
+        for row in result.scalars().all()
+    }
+
+
+def compute_ranking_score(
+    bm25_score: float,
+    popularity_score: float,
+    conversion_rate: float,
+    review_score: float,
+    in_stock: bool,
+    weights: dict[str, float] | None = None,
+) -> float:
+    """Compute final ranking score using weighted combination.
+
+    Default weights prioritize:
+    - BM25 relevance (40%)
+    - Popularity (25%)
+    - Conversion rate (15%)
+    - Review score (10%)
+    - In-stock boost (10%)
+    """
+    if weights is None:
+        weights = {
+            "bm25": 0.40,
+            "popularity": 0.25,
+            "conversion": 0.15,
+            "review": 0.10,
+            "in_stock": 0.10,
+        }
+
+    # Normalize scores to 0-1 range
+    # BM25 score can vary widely, normalize relative to max
+    # Popularity score is log-scaled already, normalize to 0-1
+    popularity_normalized = min(popularity_score / 5.0, 1.0)  # Assume max ~5
+
+    # Conversion rate is already 0-1
+    # Review score normalize from 1-5 to 0-1
+    review_normalized = (review_score - 1.0) / 4.0 if review_score else 0.5
+
+    # In-stock boost
+    in_stock_boost = 1.0 if in_stock else 0.5
+
+    final_score = (
+        weights["bm25"] * bm25_score +
+        weights["popularity"] * popularity_normalized +
+        weights["conversion"] * conversion_rate +
+        weights["review"] * review_normalized +
+        weights["in_stock"] * in_stock_boost
+    )
+
+    return final_score
+
+
+def get_embedding(text: str) -> list[float]:
+    """Get embedding for text using OpenAI."""
+    settings = get_settings()
+    client = OpenAI(api_key=settings.openai_api_key)
+
+    response = client.embeddings.create(
+        input=text,
+        model=settings.openai_embedding_model,
+    )
+    return response.data[0].embedding
+
+
+def semantic_search_products(
+    query_embedding: list[float],
+    limit: int = 50,
+) -> list[tuple[str, float]]:
+    """Search products using vector similarity in ChromaDB.
+
+    Returns list of (product_id, similarity_score) tuples.
+    """
+    settings = get_settings()
+    chroma_client = chromadb.PersistentClient(path=settings.chroma_persist_directory)
+    collection = chroma_client.get_collection(settings.chroma_collection)
+
+    results = collection.query(
+        query_embeddings=[query_embedding],
+        n_results=limit,
+    )
+
+    if not results["ids"] or not results["ids"][0]:
+        return []
+
+    product_ids = results["ids"][0]
+    distances = results["distances"][0] if results.get("distances") else [0.0] * len(product_ids)
+
+    # Convert distance to similarity score (cosine distance to similarity)
+    # ChromaDB returns cosine distance, similarity = 1 - distance
+    return [(pid, 1.0 - dist) for pid, dist in zip(product_ids, distances)]
+
+
+def apply_personalization(
+    products: list[dict[str, Any]],
+    user_categories: list[tuple[str, float]],
+    personalization_weight: float = 0.15,
+) -> list[dict[str, Any]]:
+    """Apply personalization boost based on user's category affinity.
+
+    Boosts products in categories the user has affinity for.
+    """
+    if not user_categories:
+        return products
+
+    # Create category boost map
+    category_boost: dict[str, float] = {}
+    for cat_path, affinity in user_categories:
+        # Normalize affinity score for boosting
+        category_boost[cat_path] = affinity / 10.0  # Scale down
+
+    for product in products:
+        cat_path = product.get("category_path", "")
+        # Check for category match (exact or parent)
+        boost = 0.0
+        for cat, affinity_boost in category_boost.items():
+            if cat == cat_path or cat_path.startswith(cat + " > ") or cat.startswith(cat_path + " > "):
+                boost = max(boost, affinity_boost * personalization_weight)
+        product["personalization_boost"] = boost
+        if "final_score" in product:
+            product["final_score"] = product.get("final_score", 0) + boost
+
+    return products
+
+
+@router.get("/search", response_model=SearchResponse)
+def search_products(
+    q: str = Query(..., min_length=1, description="Search query"),
+    user_id: str | None = Query(None, description="User ID for personalization"),
+    size: int = Query(20, ge=1, le=100, description="Number of results"),
+    use_semantic: bool = Query(True, description="Use semantic search fallback"),
+) -> SearchResponse:
+    """Search products with intelligent ranking.
+
+    Ranking algorithm:
+    1. BM25 text matching from Elasticsearch for initial candidate set
+    2. Re-rank using weighted scoring:
+       - BM25 relevance score (40%)
+       - Popularity score (25%)
+       - Conversion rate (15%)
+       - Review score (10%)
+       - In-stock boost (10%)
+    3. For known users: apply category affinity personalization boost
+    4. If BM25 results are weak: fall back to semantic search (ChromaDB)
+
+    Performance target: <200ms p95 latency.
+    """
+    engine = get_engine()
+    client = get_elasticsearch_client()
+    settings = get_settings()
+
+    user_categories: list[tuple[str, float]] = []
+    is_personalized = False
+
+    # Get user categories for personalization
+    if user_id:
+        with Session(engine) as session:
+            user_categories = get_user_top_categories(session, user_id, limit=5)
+            is_personalized = len(user_categories) > 0
+
+    # Step 1: BM25 search in Elasticsearch
+    es_query = {
+        "query": {
+            "multi_match": {
+                "query": q,
+                "fields": ["title^3", "brand^2", "category_path^1.5", "description"],
+                "type": "best_fields",
+                "fuzziness": "AUTO",
+            }
+        },
+        "size": size * 2,  # Fetch more candidates for re-ranking
+    }
+
+    response = client.search(index=settings.elasticsearch_index, body=es_query)
+    hits = response.get("hits", {}).get("hits", [])
+    total_hits = response.get("hits", {}).get("total", {}).get("value", 0)
+
+    # Check if BM25 results are weak (low relevance scores)
+    max_bm25_score = max((hit["_score"] or 0 for hit in hits), default=0)
+    used_semantic_fallback = False
+
+    # Collect product IDs and BM25 scores
+    products_data: list[dict[str, Any]] = []
+    product_ids = []
+
+    for hit in hits:
+        source = hit["_source"]
+        product_id = source["product_id"]
+        bm25_score = hit["_score"] or 0.0
+        product_ids.append(product_id)
+        products_data.append({
+            "product_id": product_id,
+            "title": source["title"],
+            "brand": source["brand"],
+            "price": source["price"],
+            "category_path": source["category_path"],
+            "popularity_score": source.get("popularity_score", 0.0),
+            "bm25_score": bm25_score,
+        })
+
+    # Step 2: Semantic search fallback if BM25 results are weak
+    if use_semantic and (len(hits) < size // 2 or max_bm25_score < 5.0):
+        try:
+            query_embedding = get_embedding(q)
+            semantic_results = semantic_search_products(query_embedding, limit=size)
+
+            if semantic_results:
+                # Merge semantic results with BM25 results
+                semantic_ids = {pid for pid, _ in semantic_results}
+                existing_ids = {p["product_id"] for p in products_data}
+
+                # Add semantic-only results
+                for pid, sim_score in semantic_results:
+                    if pid not in existing_ids:
+                        # Fetch product details from ES
+                        semantic_product = fetch_products_by_ids(
+                            client, [pid], index_name=settings.elasticsearch_index
+                        )
+                        if semantic_product:
+                            p = semantic_product[0]
+                            products_data.append({
+                                "product_id": pid,
+                                "title": p["title"],
+                                "brand": p["brand"],
+                                "price": p["price"],
+                                "category_path": p["category_path"],
+                                "popularity_score": p["popularity_score"],
+                                "bm25_score": sim_score,  # Use similarity as BM25 proxy
+                            })
+                            product_ids.append(pid)
+
+                used_semantic_fallback = True
+        except Exception as e:
+            logger.warning(f"Semantic search failed: {e}")
+
+    # Step 3: Enrich with product stats for ranking
+    if product_ids:
+        with Session(engine) as session:
+            product_stats = get_product_stats_batch(session, product_ids)
+
+        # Add stats to products
+        for product in products_data:
+            pid = product["product_id"]
+            stats = product_stats.get(pid, {})
+            product["conversion_rate"] = stats.get("conversion_rate", 0.0)
+            product["review_score"] = stats.get("review_score", 3.0)
+            product["in_stock"] = stats.get("in_stock", True)
+
+    # Step 4: Compute ranking scores
+    for product in products_data:
+        bm25_normalized = product["bm25_score"] / max_bm25_score if max_bm25_score > 0 else 0.0
+        product["final_score"] = compute_ranking_score(
+            bm25_score=bm25_normalized,
+            popularity_score=product["popularity_score"],
+            conversion_rate=product.get("conversion_rate", 0.0),
+            review_score=product.get("review_score", 3.0),
+            in_stock=product.get("in_stock", True),
+        )
+
+    # Step 5: Apply personalization for known users
+    if user_categories:
+        products_data = apply_personalization(products_data, user_categories)
+
+    # Step 6: Sort by final score and take top N
+    products_data.sort(key=lambda x: x.get("final_score", 0), reverse=True)
+    top_products = products_data[:size]
+
+    # Build response
+    results = [
+        SearchProductItem(
+            product_id=p["product_id"],
+            title=p["title"],
+            brand=p["brand"],
+            price=p["price"],
+            category_path=p["category_path"],
+            popularity_score=p["popularity_score"],
+            bm25_score=p.get("bm25_score"),
+            final_score=p.get("final_score"),
+        )
+        for p in top_products
+    ]
+
+    return SearchResponse(
+        query=q,
+        user_id=user_id,
+        results=results,
+        total_hits=total_hits,
+        is_personalized=is_personalized,
+        used_semantic_fallback=used_semantic_fallback,
     )
