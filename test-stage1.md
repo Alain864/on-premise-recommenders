@@ -181,3 +181,10 @@ sqlite3 ./var/stage1.db "SELECT left_product_id, right_product_id, pair_count FR
 
 **Query co-view pairs directly**
 sqlite3 ./var/stage1.db "SELECT left_product_id, right_product_id, pair_count FROM co_view_pairs ORDER BY pair_count DESC LIMIT 10;"
+
+
+# Basic search
+curl -s "http://127.0.0.1:8000/recommendations/search?q=adapter&size=5" | jq .
+
+# Personalized search
+curl -s "http://127.0.0.1:8000/recommendations/search?q=cable&user_id=USR_13914CAFA179&size=5" | jq .
