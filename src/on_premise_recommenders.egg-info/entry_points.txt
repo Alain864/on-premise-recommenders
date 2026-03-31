@@ -1,0 +1,2 @@
+[console_scripts]
+recommender-stage1 = onprem_recommenders.cli:run

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+from datetime import datetime
 
 import typer
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from .config import Settings, get_settings
 from .db import create_db_engine, init_db
@@ -11,8 +14,12 @@ from .etl.derived_tables import materialize_derived_tables
 from .etl.embeddings import sync_product_embeddings
 from .etl.parquet_loader import load_source_tables
 from .etl.search_index import sync_products_to_elasticsearch
+from .infrastructure import compute_trending_products
+from .models import Event, FeatureFlag
 
-app = typer.Typer(help="Stage 1 data foundation pipeline")
+app = typer.Typer(help="On-Premise Recommenders CLI")
+infrastructure_app = typer.Typer(help="Infrastructure management commands")
+app.add_typer(infrastructure_app, name="infra")
 
 
 def _resolve_settings(
@@ -181,6 +188,162 @@ def run_stage1_command(
             batch_size=settings.embedding_batch_size,
         )
         typer.echo(f"  chroma_embeddings: {synced}")
+
+
+@infrastructure_app.command("compute-trending")
+def compute_trending_command(
+    period: str = typer.Option(default="daily", help="Trending period (hourly, daily)"),
+    top_n: int = typer.Option(default=10, help="Top N products per category"),
+    categories: int = typer.Option(default=5, help="Number of top categories"),
+    database_url: str | None = typer.Option(default=None),
+) -> None:
+    """Compute and store trending products for fallback recommendations."""
+    settings = _resolve_settings(database_url=database_url)
+    engine = create_db_engine(settings.database_url)
+    count = compute_trending_products(
+        engine,
+        period=period,
+        top_n_per_category=top_n,
+        top_categories=categories,
+    )
+    typer.echo(f"Computed {count} trending products for period '{period}'")
+
+
+@infrastructure_app.command("list-events")
+def list_events_command(
+    feature: str | None = typer.Option(default=None, help="Filter by feature"),
+    event_type: str | None = typer.Option(default=None, help="Filter by event type"),
+    limit: int = typer.Option(default=20, help="Maximum number of events to show"),
+    database_url: str | None = typer.Option(default=None),
+) -> None:
+    """List recent events from the event log."""
+    settings = _resolve_settings(database_url=database_url)
+    engine = create_db_engine(settings.database_url)
+
+    with Session(engine) as session:
+        query = select(Event).order_by(Event.timestamp.desc())
+        if feature:
+            query = query.where(Event.feature == feature)
+        if event_type:
+            query = query.where(Event.event_type == event_type)
+        query = query.limit(limit)
+        events = session.execute(query).scalars().all()
+
+    if not events:
+        typer.echo("No events found")
+        return
+
+    typer.echo(f"Found {len(events)} events:")
+    for e in events:
+        typer.echo(
+            f"  [{e.timestamp}] {e.feature}/{e.event_type} "
+            f"user={e.user_id or 'anonymous'} "
+            f"products={e.product_ids}"
+        )
+
+
+@infrastructure_app.command("list-flags")
+def list_flags_command(
+    database_url: str | None = typer.Option(default=None),
+) -> None:
+    """List all feature flags and their status."""
+    settings = _resolve_settings(database_url=database_url)
+    engine = create_db_engine(settings.database_url)
+
+    with Session(engine) as session:
+        flags = session.execute(select(FeatureFlag)).scalars().all()
+
+    if not flags:
+        typer.echo("No feature flags found")
+        return
+
+    typer.echo(f"Found {len(flags)} feature flags:")
+    for f in flags:
+        status = "enabled" if f.enabled else "disabled"
+        typer.echo(
+            f"  {f.feature_name}: {f.variant} ({status}) "
+            f"segment={f.user_segment or 'all'}"
+        )
+
+
+@infrastructure_app.command("set-flag")
+def set_flag_command(
+    feature_name: str,
+    enabled: bool = typer.Option(default=True, help="Enable or disable the flag"),
+    variant: str = typer.Option(default="control", help="A/B test variant"),
+    description: str | None = typer.Option(default=None, help="Flag description"),
+    database_url: str | None = typer.Option(default=None),
+) -> None:
+    """Create or update a feature flag."""
+    settings = _resolve_settings(database_url=database_url)
+    engine = create_db_engine(settings.database_url)
+
+    with Session(engine) as session:
+        flag = session.execute(
+            select(FeatureFlag).where(FeatureFlag.feature_name == feature_name)
+        ).scalars().first()
+
+        if flag:
+            flag.enabled = enabled
+            flag.variant = variant
+            if description:
+                flag.description = description
+            flag.updated_at = datetime.utcnow()
+            typer.echo(f"Updated feature flag '{feature_name}'")
+        else:
+            flag = FeatureFlag(
+                feature_name=feature_name,
+                variant=variant,
+                enabled=enabled,
+                description=description,
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow(),
+            )
+            session.add(flag)
+            typer.echo(f"Created feature flag '{feature_name}'")
+
+        session.commit()
+
+
+@infrastructure_app.command("run-nightly")
+def run_nightly_command(
+    database_url: str | None = typer.Option(default=None),
+) -> None:
+    """Run all nightly maintenance tasks manually.
+
+    This includes:
+    - Derived tables recomputation
+    - Trending products computation
+    - Query suggestions update
+    """
+    settings = _resolve_settings(database_url=database_url)
+    engine = create_db_engine(settings.database_url)
+    init_db(engine)
+
+    typer.echo("Running nightly maintenance tasks...")
+
+    # Derived tables
+    typer.echo("  Building derived tables...")
+    counts = materialize_derived_tables(engine, session_gap_minutes=settings.session_gap_minutes)
+    for table_name, count in counts.items():
+        typer.echo(f"    {table_name}: {count} rows")
+
+    # Trending products
+    typer.echo("  Computing trending products...")
+    trending_count = compute_trending_products(
+        engine,
+        period="daily",
+        top_n_per_category=10,
+        top_categories=5,
+    )
+    typer.echo(f"    trending_products: {trending_count} products")
+
+    # Query suggestions
+    typer.echo("  Building query suggestions...")
+    suggestions_count = materialize_query_suggestions(engine)
+    typer.echo(f"    query_suggestions: {suggestions_count} suggestions")
+
+    typer.echo("Nightly maintenance completed!")
 
 
 def run() -> None:

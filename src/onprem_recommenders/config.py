@@ -68,6 +68,22 @@ class Settings(BaseSettings):
         default=50,
         validation_alias="EMBEDDING_BATCH_SIZE",
     )
+    redis_url: str = Field(
+        default="redis://localhost:6379/0",
+        validation_alias="REDIS_URL",
+    )
+    celery_broker_url: str | None = Field(
+        default=None,
+        validation_alias="CELERY_BROKER_URL",
+    )
+    celery_result_backend: str | None = Field(
+        default=None,
+        validation_alias="CELERY_RESULT_BACKEND",
+    )
+    trending_computation_period: str = Field(
+        default="daily",
+        validation_alias="TRENDING_COMPUTATION_PERIOD",
+    )
 
     def ensure_local_dirs(self) -> None:
         Path("var").mkdir(exist_ok=True)
