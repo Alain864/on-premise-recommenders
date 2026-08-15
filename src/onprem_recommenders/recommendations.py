@@ -30,6 +30,55 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/recommendations", tags=["recommendations"])
 
 
+# Product detail endpoint for frontend
+class ProductDetail(BaseModel):
+    """Product detail response."""
+
+    product_id: str
+    title: str
+    brand: str
+    price: float
+    category_path: str
+    description: str | None = None
+    popularity_score: float = 0.0
+
+
+@router.get("/product/{product_id}", response_model=ProductDetail)
+def get_product_detail(product_id: str) -> ProductDetail:
+    """Get product details by ID.
+
+    Fetches product information from Elasticsearch.
+    """
+    client = get_elasticsearch_client()
+    settings = get_settings()
+
+    query = {
+        "query": {
+            "term": {
+                "product_id": product_id
+            }
+        },
+        "size": 1,
+    }
+
+    response = client.search(index=settings.elasticsearch_index, body=query)
+    hits = response.get("hits", {}).get("hits", [])
+
+    if not hits:
+        raise HTTPException(status_code=404, detail=f"Product '{product_id}' not found")
+
+    source = hits[0]["_source"]
+    return ProductDetail(
+        product_id=source["product_id"],
+        title=source["title"],
+        brand=source["brand"],
+        price=source["price"],
+        category_path=source["category_path"],
+        description=source.get("description"),
+        popularity_score=source.get("popularity_score", 0.0),
+    )
+
+
 # Response models
 class ProductItem(BaseModel):
     product_id: str
