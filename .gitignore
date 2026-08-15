@@ -7,3 +7,9 @@ __pycache__/
 var/
 .env
 
+# Frontend build artifacts and local OS files
+frontend/dist/
+frontend/target/
+frontend/.DS_Store
+**/.DS_Store
+
