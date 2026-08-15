@@ -4,17 +4,18 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "on-premise-recommenders"
-version = "0.1.0"
-description = "Proof-of-concept search and recommendation system"
+version = "0.2.0"
+description = "On-premise search and recommendation system"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+  "alembic>=1.16.0",
   "celery[redis]>=5.4.0",
-  "chromadb>=1.5.5",
   "elasticsearch>=8.0.0,<9.0.0",
   "fastapi>=0.135.1",
   "openai>=2.29.0",
   "pandas>=3.0.1",
+  "pgvector>=0.4.0",
   "pyarrow>=23.0.1",
   "psycopg[binary]>=3.3.3",
   "pydantic-settings>=2.13.1",
@@ -26,11 +27,21 @@ dependencies = [
   "uvicorn[standard]>=0.42.0",
 ]
 
+[project.optional-dependencies]
+dev = [
+  "httpx>=0.28.0",
+  "pytest>=8.0.0",
+]
+
 [project.scripts]
-recommender-stage1 = "onprem_recommenders.cli:run"
+recommender = "onprem_recommenders.cli:run"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

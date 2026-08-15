@@ -1,9 +1,10 @@
+alembic>=1.16.0
 celery[redis]>=5.4.0
-chromadb>=1.5.5
 elasticsearch<9.0.0,>=8.0.0
 fastapi>=0.135.1
 openai>=2.29.0
 pandas>=3.0.1
+pgvector>=0.4.0
 pyarrow>=23.0.1
 psycopg[binary]>=3.3.3
 pydantic-settings>=2.13.1
@@ -13,3 +14,7 @@ sqlalchemy>=2.0.48
 tenacity>=9.1.4
 typer>=0.24.1
 uvicorn[standard]>=0.42.0
+
+[dev]
+httpx>=0.28.0
+pytest>=8.0.0

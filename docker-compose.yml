@@ -1,7 +1,26 @@
-# Docker Compose for On-Premise Recommenders
-# Run: docker-compose up -d
+# Infra for the recommender POC.
+# App, Celery worker, and frontend run on the host against these services.
+#   docker compose up -d
+#   docker compose down
 
 services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: recommender-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: recommender
+      POSTGRES_PASSWORD: recommender
+      POSTGRES_DB: recommender
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U recommender -d recommender"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
   elasticsearch:
     image: elasticsearch:8.11.0
     container_name: recommender-elasticsearch
@@ -19,5 +38,17 @@ services:
     volumes:
       - elasticsearch_data:/usr/share/elasticsearch/data
 
+  redis:
+    image: redis:7-alpine
+    container_name: recommender-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
 volumes:
+  postgres_data:
   elasticsearch_data:

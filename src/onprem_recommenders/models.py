@@ -2,7 +2,17 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, Integer, Numeric, String, Text
+from pgvector.sqlalchemy import Vector
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Float,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    Text,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -27,14 +37,17 @@ class Product(Base):
     price: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
     category_path: Mapped[str] = mapped_column(String(512), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(1536), nullable=True)
+    embedding_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
 
 
 class Transaction(Base):
     __tablename__ = "transactions"
+    __table_args__ = (Index("ix_transactions_user_id", "user_id"),)
 
     order_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     product_id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    user_id: Mapped[str] = mapped_column(String(64), nullable=False)
     timestamp: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
 
 
@@ -79,6 +92,7 @@ class ProductStats(Base):
 
 class CoPurchasePair(Base):
     __tablename__ = "co_purchase_pairs"
+    __table_args__ = (Index("ix_co_purchase_right", "right_product_id"),)
 
     left_product_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     right_product_id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -87,6 +101,7 @@ class CoPurchasePair(Base):
 
 class CoViewPair(Base):
     __tablename__ = "co_view_pairs"
+    __table_args__ = (Index("ix_co_view_right", "right_product_id"),)
 
     left_product_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     right_product_id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -94,51 +109,36 @@ class CoViewPair(Base):
 
 
 class QuerySuggestion(Base):
-    """Stores query text with frequency for autocomplete suggestions.
-
-    Built from search interactions - aggregates query frequency globally
-    and per-category for personalized suggestions.
-    """
+    """Prefix source of truth. Empty category_path means a global suggestion."""
 
     __tablename__ = "query_suggestions"
+    __table_args__ = (Index("ix_query_suggestions_text", "query_text"),)
 
     query_text: Mapped[str] = mapped_column(String(512), primary_key=True)
+    category_path: Mapped[str] = mapped_column(String(512), primary_key=True, default="")
     frequency: Mapped[int] = mapped_column(Integer, nullable=False)
-    category_path: Mapped[str | None] = mapped_column(String(512), nullable=True, primary_key=True)
     last_updated: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class Event(Base):
-    """Logs user interaction events for analytics and model retraining.
-
-    Tracks impressions (products shown) and clicks (user actions) from
-    all recommendation features.
-    """
-
     __tablename__ = "events"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     feature: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     event_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
-    product_ids: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON array of product IDs
+    product_ids: Mapped[str | None] = mapped_column(Text, nullable=True)
     query_text: Mapped[str | None] = mapped_column(String(512), nullable=True)
-    metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)  # Additional metadata as JSON
+    metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     timestamp: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
 
 
 class FeatureFlag(Base):
-    """Feature flags for A/B testing and gradual rollouts.
-
-    Controls which variant of a feature is enabled for different
-    user segments.
-    """
-
     __tablename__ = "feature_flags"
 
     feature_name: Mapped[str] = mapped_column(String(64), primary_key=True)
     variant: Mapped[str] = mapped_column(String(32), nullable=False, default="control")
-    user_segment: Mapped[str | None] = mapped_column(String(64), nullable=True)  # e.g., "new_users", "power_users"
+    user_segment: Mapped[str | None] = mapped_column(String(64), nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     description: Mapped[str | None] = mapped_column(String(256), nullable=True)
     created_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -146,19 +146,16 @@ class FeatureFlag(Base):
 
 
 class TrendingProduct(Base):
-    """Precomputed trending products for fallback recommendations.
-
-    Updated periodically (hourly/daily) to provide fast fallback
-    recommendations for anonymous and cold-start users.
-    """
-
     __tablename__ = "trending_products"
+    __table_args__ = (
+        Index("ix_trending_period_root_rank", "period", "root_category", "rank"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     product_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
-    category_path: Mapped[str | None] = mapped_column(String(512), nullable=True, index=True)
+    category_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    root_category: Mapped[str] = mapped_column(String(256), nullable=False, index=True)
     rank: Mapped[int] = mapped_column(Integer, nullable=False)
     score: Mapped[float] = mapped_column(Float, nullable=False)
-    period: Mapped[str] = mapped_column(String(32), nullable=False)  # e.g., "hourly", "daily"
+    period: Mapped[str] = mapped_column(String(32), nullable=False)
     computed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-

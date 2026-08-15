@@ -1,2 +1,1 @@
-"""On-premise recommenders prototype."""
-
+"""On-premise search and recommendation system."""

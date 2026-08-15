@@ -1,22 +1,28 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Iterator
 
-from sqlalchemy import create_engine, delete, insert
+from pgvector.psycopg import register_vector
+from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
-from .models import Base
 
+def create_db_engine(database_url: str, *, pool_size: int = 10) -> Engine:
+    engine = create_engine(
+        database_url,
+        future=True,
+        pool_size=pool_size,
+        max_overflow=20,
+        pool_pre_ping=True,
+    )
 
-def create_db_engine(database_url: str) -> Engine:
-    connect_args = {"check_same_thread": False} if database_url.startswith("sqlite") else {}
-    return create_engine(database_url, future=True, connect_args=connect_args)
+    @event.listens_for(engine, "connect")
+    def _register_vector(dbapi_connection, _connection_record) -> None:  # type: ignore[no-untyped-def]
+        register_vector(dbapi_connection)
 
-
-def init_db(engine: Engine) -> None:
-    Base.metadata.create_all(engine)
+    return engine
 
 
 @contextmanager
@@ -30,10 +36,3 @@ def session_scope(engine: Engine) -> Iterator[Session]:
         raise
     finally:
         session.close()
-
-
-def replace_table_rows(session: Session, model: type[Base], rows: list[dict]) -> None:
-    session.execute(delete(model))
-    if rows:
-        session.execute(insert(model), rows)
-
