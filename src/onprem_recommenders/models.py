@@ -32,7 +32,7 @@ class Product(Base):
     __tablename__ = "products"
 
     product_id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    title: Mapped[str] = mapped_column(String(512), nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
     brand: Mapped[str] = mapped_column(String(256), nullable=False)
     price: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
     category_path: Mapped[str] = mapped_column(String(512), nullable=False)

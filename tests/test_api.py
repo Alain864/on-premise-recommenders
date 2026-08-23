@@ -24,9 +24,11 @@ def test_health(client):
 
 
 def test_homepage_anonymous(client):
-    response = client.get("/recommendations/homepage")
-    assert response.status_code == 200
-    body = response.json()
+    first = client.get("/recommendations/homepage")
+    second = client.get("/recommendations/homepage")
+    assert first.status_code == 200
+    assert second.status_code == 200
+    body = second.json()
     assert body["is_personalized"] is False
     assert "rows" in body
 
